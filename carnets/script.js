@@ -1,9 +1,29 @@
+// ⚠️ PEGA AQUÍ TU URL DE GOOGLE APPS SCRIPT ⚠️
+const URL_GOOGLE_SCRIPT = "https://script.google.com/macros/s/AKfycby3bZTg_ScKdJpnbaHBJyLsLOCnf6DDwoEATlIcT05JKgUJzzzYHWOd2GYbnecdRaH8WA/exec";
+
 const form = document.getElementById('carnetForm');
 const previewBtn = document.getElementById('previewBtn');
 const canvas = document.getElementById('carnetCanvas');
 const ctx = canvas.getContext('2d');
+let numeroCarnetActual = null;
 
-// FUNCIÓN DE DIBUJO (IDÉNTICA A LA TUYA, NO TOCAMOS COORDENADAS)
+// Función para obtener el número de carnet en tiempo real desde Google Sheets
+async function obtenerSiguienteNumero() {
+    try {
+        const response = await fetch(URL_GOOGLE_SCRIPT);
+        const data = await response.json();
+        numeroCarnetActual = data.numero;
+        console.log("Siguiente número de carnet obtenido:", numeroCarnetActual);
+    } catch (error) {
+        console.error("Error al obtener el número de carnet:", error);
+        numeroCarnetActual = "??"; // Número de emergencia por si falla la conexión
+    }
+}
+
+// Llamamos a la función nada más cargar la web para tener el número listo
+obtenerSiguienteNumero();
+
+// FUNCIÓN DE DIBUJO (Con tus coordenadas y campos integrados)
 async function generarCarnet() {
     return new Promise((resolve, reject) => {
         const plantilla = new Image();
@@ -23,6 +43,11 @@ async function generarCarnet() {
             ctx.font = '35px Arial';
             ctx.fillText(document.getElementById('direccion').value, 609, 808);
             ctx.fillText(document.getElementById('email').value, 730, 887);
+
+            // --- NUEVO: DIBUJAR NÚMERO DE CARNET AUTOMÁTICO ---
+            ctx.fillStyle = '#1a1a1a'; 
+            ctx.font = 'bold 45px Arial'; 
+            ctx.fillText(`Nº ${numeroCarnetActual}`, 1073, 1019); // Tus coordenadas exactas
 
             const hoy = new Date();
             const dia = String(hoy.getDate()).padStart(2, '0');
@@ -74,32 +99,54 @@ async function generarCarnet() {
 previewBtn.addEventListener('click', async () => {
     if (form.checkValidity()) {
         await generarCarnet();
+        // Mostrar el título de resultado final que estaba oculto
+        document.getElementById('previewTitle').style.display = 'block';
         canvas.scrollIntoView({ behavior: 'smooth' });
     } else {
         form.reportValidity();
     }
 });
 
-// Formulario Submit: Genera y descarga el PDF
+// FORMULARIO SUBMIT: Envía a Google Sheets y descarga el PDF
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
     
+    const downloadBtn = document.getElementById('downloadBtn');
+    downloadBtn.disabled = true;
+    downloadBtn.innerText = "Guardando...";
+
     await generarCarnet();
     
+    // 1. Guardar los datos en el Google Sheet en segundo plano
+    const datosAlumno = {
+        numero: numeroCarnetActual,
+        nombre: document.getElementById('nombre').value,
+        apellido: document.getElementById('apellido').value
+    };
+
+    try {
+        await fetch(URL_GOOGLE_SCRIPT, {
+            method: 'POST',
+            mode: 'no-cors', // Evita problemas de CORS
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(datosAlumno)
+        });
+    } catch (error) {
+        console.error("No se pudo guardar en la base de datos:", error);
+    }
+    
+    // 2. Generar y descargar el PDF
     const { jsPDF } = window.jspdf;
     const pdf = new jspdf.jsPDF('p', 'mm', 'a4');
 
-    // --- TAMAÑO XL (12cm de ancho) ---
     const anchoMM = 120; 
-    const altoMM = 85;   // Mantiene la proporción 1600x1135 casi exacta
-    const x = (210 - anchoMM) / 2; // Centrado horizontal
-    const y = 20; // Un poco más arriba para que quepan las dos caras
+    const altoMM = 85;   
+    const x = (210 - anchoMM) / 2; 
+    const y = 20; 
 
-    // 1. Añadir Cara Frontal
     const imgData = canvas.toDataURL('image/jpeg', 1.0);
     pdf.addImage(imgData, 'JPEG', x, y, anchoMM, altoMM);
 
-    // 2. Añadir Cara Trasera
     try {
         pdf.addImage('trasera.jpg', 'JPEG', x, y + altoMM, anchoMM, altoMM);
     } catch (error) {
@@ -108,9 +155,14 @@ form.addEventListener('submit', async (e) => {
         pdf.rect(x, y + altoMM, anchoMM, altoMM);
     }
 
-    // 3. Línea de puntos para el doblez
     pdf.setLineDash([1, 1], 0);
     pdf.line(x, y + altoMM, x + anchoMM, y + altoMM);
 
     pdf.save(`Carnet_${document.getElementById('nombre').value}.pdf`);
+
+    // 3. Volver a consultar el siguiente número para el próximo carnet
+    obtenerSiguienteNumero().then(() => {
+        downloadBtn.disabled = false;
+        downloadBtn.innerText = "Descargar PDF";
+    });
 });
